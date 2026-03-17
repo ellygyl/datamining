@@ -336,53 +336,482 @@ class CloudStorageManager:
 class StreamProcessor:
     """流处理器 - Flink 实时处理"""
 
+    # Kafka 配置
+    KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+    KAFKA_GROUP_ID = "autopilot-stream-processor"
+
+    # Topic 配置
+    TOPIC_METADATA = "topic_metadata"
+    TOPIC_HIGH_PRIORITY = "topic_high_priority"
+    TOPIC_MEDIUM_PRIORITY = "topic_medium_priority"
+    TOPIC_LOW_PRIORITY = "topic_low_priority"
+
+    # 窗口配置（Flink 窗口）
+    WINDOW_SIZE_SECONDS = 60  # 60秒窗口
+    WINDOW_SLIDE_SECONDS = 10  # 10秒滑动
+    WINDOW_SIZE_EVENTS = 100  # 事件计数窗口
+
+    # 告警阈值
+    AEB_ALERT_THRESHOLD = 3  # 1分钟内AEB触发次数
+    HIGH_RISK_VEHICLE_THRESHOLD = 5  # 高频告警阈值
+    TRIGGER_RATE_THRESHOLD = 10  # 触发率阈值（次/分钟）
+
     def __init__(self):
         self.alerts = []
         self.vehicle_health = {}
+        self.window_buffer = {}  # 窗口缓冲区 {vehicle_id: [events]}
+        self.state = {}  # 流状态管理
+        self.watermarks = {}  # 水位线
+        self.running = False
+        self.keyed_streams = {}  # Keyed Stream 状态
+
+        # Flink 运行时指标
+        self.metrics = {
+            "events_processed": 0,
+            "events_per_second": 0.0,
+            "latency_ms": 0,
+            "window_count": 0,
+            "checkpoint_count": 0
+        }
+
+    def start_stream_job(self):
+        """启动 Flink 流处理作业"""
+        logger.info("=" * 50)
+        logger.info("启动 Flink 流处理作业")
+        logger.info("=" * 50)
+
+        self.running = True
+        logger.info(f"Kafka Bootstrap: {self.KAFKA_BOOTSTRAP_SERVERS}")
+        logger.info(f"消费 Topics: {self.TOPIC_METADATA}, {self.TOPIC_HIGH_PRIORITY}, {self.TOPIC_MEDIUM_PRIORITY}")
+        logger.info(f"窗口大小: {self.WINDOW_SIZE_SECONDS}s, 滑动: {self.WINDOW_SLIDE_SECONDS}s")
+        logger.info(f"并行度: 4")
+
+        # 初始化流管道
+        self._init_stream_pipeline()
+
+    def _init_stream_pipeline(self):
+        """初始化 Flink 流管道"""
+        logger.info("初始化 Flink DataStream Pipeline...")
+
+        # 模拟 Flink Source: 从 Kafka 消费
+        kafka_source = self._create_kafka_source()
+
+        # Flink Transformations
+        # 1. KeyBy: 按 vehicle_id 分区
+        keyed_stream = self._key_by_vehicle(kafka_source)
+
+        # 2. Window: 时间窗口处理
+        windowed_stream = self._apply_time_window(keyed_stream)
+
+        # 3. Process: 处理窗口数据
+        processed_stream = self._process_window(windowed_stream)
+
+        # 4. Sink: 输出结果
+        self._sink_to_dashboard(processed_stream)
+
+        logger.info("Flink Pipeline 初始化完成")
+        logger.info("Source -> KeyBy -> Window -> Process -> Sink")
+
+    def _create_kafka_source(self):
+        """创建 Kafka Source"""
+        logger.info("创建 Kafka FlinkKafkaConsumer...")
+        logger.info(f"Topics: [{self.TOPIC_METADATA}, {self.TOPIC_HIGH_PRIORITY}, {self.TOPIC_MEDIUM_PRIORITY}]")
+        logger.info("Deserialization: JSON")
+        logger.info("Watermark Strategy: BoundedOutOfOrdernessTimestampExtractor(5s)")
+        return []
+
+    def _key_by_vehicle(self, stream):
+        """按 vehicle_id 分区（KeyBy）"""
+        logger.info("执行 KeyBy 分区: vehicle_id")
+        return []
+
+    def _apply_time_window(self, keyed_stream):
+        """应用时间窗口"""
+        logger.info(f"应用时间窗口: TumblingEventTimeWindows({self.WINDOW_SIZE_SECONDS}s)")
+        logger.info("允许延迟: AllowedLateness(1s)")
+        return []
+
+    def _process_window(self, windowed_stream):
+        """处理窗口数据"""
+        logger.info("ProcessWindowFunction: 聚合窗口内事件")
+        return []
+
+    def _sink_to_dashboard(self, processed_stream):
+        """Sink: 输出到大屏"""
+        logger.info("Sink: 输出到车辆健康大屏")
 
     def consume_kafka_message(self, message: Dict) -> Optional[Dict]:
-        """消费 Kafka 消息"""
+        """
+        消费 Kafka 消息 - 模拟 Flink 流处理
+        实际实现中，这是 Flink 的 SourceFunction
+        """
+        self.metrics["events_processed"] += 1
+
+        # 解析消息
         event = json.loads(message) if isinstance(message, str) else message
 
-        # 实时解析元数据
+        # 提取事件时间（Flink EventTime）
+        event_time = event.get("timestamp")
+        vehicle_id = event.get("vehicle_id")
+
+        if not event_time or not vehicle_id:
+            logger.warning("消息缺少必要字段")
+            return None
+
+        # 更新水位线（Watermark）
+        self._update_watermark(vehicle_id, event_time)
+
+        # KeyBy: 按 vehicle_id 路由到对应的 KeyedStream
+        keyed_stream_result = self._route_to_keyed_stream(vehicle_id, event)
+
+        # 窗口处理（Flink Window Function）
+        window_result = self._process_event_in_window(vehicle_id, event)
+
+        # 实时解析元数据（Map Function）
         self._update_vehicle_health(event)
 
-        # 实时告警检查
+        # 实时告警检查（Filter Function）
         alert = self._check_high_risk_scenario(event)
         if alert:
             self._send_alert(alert)
 
+        # 检查点（Checkpoint）- Flink 状态一致性保证
+        if self.metrics["events_processed"] % 100 == 0:
+            self._trigger_checkpoint()
+
+        # 更新吞吐量指标
+        self._update_metrics()
+
         return event
+
+    def _update_watermark(self, vehicle_id: str, event_time: str):
+        """
+        更新水位线（Watermark）
+        Watermark = max(已见事件时间) - 允许的延迟
+        """
+        try:
+            ts = datetime.fromisoformat(event_time.replace('Z', '+00:00'))
+            if vehicle_id not in self.watermarks:
+                self.watermarks[vehicle_id] = ts
+            else:
+                self.watermarks[vehicle_id] = max(self.watermarks[vehicle_id], ts)
+        except:
+            pass
+
+    def _route_to_keyed_stream(self, vehicle_id: str, event: Dict) -> Dict:
+        """
+        KeyBy 操作：按 vehicle_id 分区
+        相同 vehicle_id 的事件会发送到同一个算子实例
+        """
+        if vehicle_id not in self.keyed_streams:
+            self.keyed_streams[vehicle_id] = {
+                "partition_id": hash(vehicle_id) % 4,  # 模拟4个并行度
+                "events": [],
+                "state": {}
+            }
+
+        self.keyed_streams[vehicle_id]["events"].append(event)
+        return self.keyed_streams[vehicle_id]
+
+    def _process_event_in_window(self, vehicle_id: str, event: Dict) -> Dict:
+        """
+        在窗口内处理事件
+        实现 Flink 的 WindowFunction
+        """
+        # 初始化窗口缓冲区
+        if vehicle_id not in self.window_buffer:
+            self.window_buffer[vehicle_id] = {
+                "time_window": [],  # 时间窗口
+                "count_window": [],  # 计数窗口
+                "window_start": None,
+                "window_count": 0
+            }
+
+        buffer = self.window_buffer[vehicle_id]
+
+        # 添加事件到窗口
+        buffer["time_window"].append(event)
+        buffer["count_window"].append(event)
+
+        # 计数窗口处理（每 WINDOW_SIZE_EVENTS 个事件触发一次）
+        if len(buffer["count_window"]) >= self.WINDOW_SIZE_EVENTS:
+            result = self._apply_window_function(vehicle_id, buffer["count_window"])
+            buffer["count_window"] = []  # 清空计数窗口
+            self.metrics["window_count"] += 1
+            return result
+
+        # 时间窗口处理（每 WINDOW_SIZE_SECONDS 秒触发一次）
+        current_time = datetime.now()
+        if buffer["window_start"] is None:
+            buffer["window_start"] = current_time
+
+        elapsed = (current_time - buffer["window_start"]).total_seconds()
+        if elapsed >= self.WINDOW_SIZE_SECONDS:
+            result = self._apply_window_function(vehicle_id, buffer["time_window"])
+            buffer["time_window"] = []
+            buffer["window_start"] = current_time
+            self.metrics["window_count"] += 1
+            return result
+
+        return {}
+
+    def _apply_window_function(self, vehicle_id: str, window_events: List[Dict]) -> Dict:
+        """
+        应用窗口函数（WindowFunction）
+        对窗口内的数据进行聚合计算
+        """
+        self.metrics["window_count"] += 1
+        logger.info(f"触发窗口聚合: vehicle_id={vehicle_id}, 窗口大小={len(window_events)}")
+
+        # 聚合计算
+        aggregation = {
+            "vehicle_id": vehicle_id,
+            "window_start": window_events[0].get("timestamp") if window_events else None,
+            "window_end": window_events[-1].get("timestamp") if window_events else None,
+            "event_count": len(window_events),
+            "trigger_types": {},
+            "avg_longitudinal_acc": 0,
+            "avg_lateral_acc": 0,
+            "avg_speed": 0,
+            "max_brake_pedal": 0,
+            "aeb_count": 0
+        }
+
+        # 累计聚合指标
+        acc_long_sum = 0
+        acc_lat_sum = 0
+        speed_sum = 0
+
+        for event in window_events:
+            # 触发类型统计
+            trigger_type = event.get("trigger_type", "unknown")
+            aggregation["trigger_types"][trigger_type] = aggregation["trigger_types"].get(trigger_type, 0) + 1
+
+            # CAN 数据聚合
+            can_data = event.get("can_data", {})
+            acc_long_sum += can_data.get("longitudinal_acc", 0)
+            acc_lat_sum += can_data.get("lateral_acc", 0)
+            speed_sum += can_data.get("speed", 0)
+
+            brake_pedal = can_data.get("brake_pedal", 0)
+            aggregation["max_brake_pedal"] = max(aggregation["max_brake_pedal"], brake_pedal)
+
+            # AEB 统计
+            if "AEB" in event.get("trigger_reason", ""):
+                aggregation["aeb_count"] += 1
+
+        # 计算平均值
+        if window_events:
+            aggregation["avg_longitudinal_acc"] = acc_long_sum / len(window_events)
+            aggregation["avg_lateral_acc"] = acc_lat_sum / len(window_events)
+            aggregation["avg_speed"] = speed_sum / len(window_events)
+
+        # AEB 频繁告警
+        if aggregation["aeb_count"] >= self.AEB_ALERT_THRESHOLD:
+            alert = {
+                "vehicle_id": vehicle_id,
+                "alert_type": "AEB_FREQUENT",
+                "message": f"{self.WINDOW_SIZE_SECONDS}秒内AEB触发{aggregation['aeb_count']}次",
+                "timestamp": datetime.now().isoformat(),
+                "window_aggregation": aggregation
+            }
+            self._send_alert(alert)
+
+        # 更新流状态（State Backend）
+        self._update_state(vehicle_id, aggregation)
+
+        # 输出窗口结果（Sink）
+        logger.info(f"窗口聚合结果: {aggregation}")
+
+        return aggregation
+
+    def _update_state(self, vehicle_id: str, aggregation: Dict):
+        """
+        更新流状态（State Backend）
+        Flink 使用 KeyedState 保存每个 Key 的状态
+        """
+        if vehicle_id not in self.state:
+            self.state[vehicle_id] = {
+                "window_history": [],
+                "total_events": 0,
+                "total_aeb": 0,
+                "last_update": datetime.now()
+            }
+
+        state = self.state[vehicle_id]
+        state["window_history"].append(aggregation)
+        state["total_events"] += aggregation["event_count"]
+        state["total_aeb"] += aggregation["aeb_count"]
+        state["last_update"] = datetime.now()
+
+        # 只保留最近10个窗口的历史（TTL）
+        if len(state["window_history"]) > 10:
+            state["window_history"] = state["window_history"][-10:]
+
+    def _trigger_checkpoint(self):
+        """
+        触发检查点（Checkpoint）
+        Flink 通过 Checkpoint 保证状态的一致性和容错
+        """
+        self.metrics["checkpoint_count"] += 1
+        logger.info(f"触发 Checkpoint: checkpoint_id={self.metrics['checkpoint_count']}")
+
+        # 模拟快照状态（转换 datetime 为字符串以便 JSON 序列化）
+        checkpoint_state = {
+            "checkpoint_id": self.metrics["checkpoint_count"],
+            "timestamp": datetime.now().isoformat(),
+            "vehicle_health": self._serialize_state(self.vehicle_health),
+            "state": self._serialize_state(self.state),
+            "watermarks": self._serialize_state(self.watermarks)
+        }
+
+        state_size = len(json.dumps(checkpoint_state))
+        logger.info(f"Checkpoint 完成: 状态大小={state_size} bytes")
+
+    def _serialize_state(self, state_dict: Dict) -> Dict:
+        """将状态中的 datetime 对象序列化为字符串"""
+        serialized = {}
+        for key, value in state_dict.items():
+            if isinstance(value, dict):
+                serialized[key] = self._serialize_state(value)
+            elif isinstance(value, datetime):
+                serialized[key] = value.isoformat()
+            elif isinstance(value, list):
+                serialized[key] = [self._serialize_state(v) if isinstance(v, dict) else v for v in value]
+            else:
+                serialized[key] = value
+        return serialized
+
+    def _update_metrics(self):
+        """更新运行时指标"""
+        if self.metrics["events_processed"] % 10 == 0:
+            # 模拟计算吞吐量和延迟
+            self.metrics["events_per_second"] = random.uniform(800, 1200)
+            self.metrics["latency_ms"] = random.uniform(5, 50)
+
+            logger.debug(
+                f"Flink Metrics: "
+                f"events_processed={self.metrics['events_processed']}, "
+                f"throughput={self.metrics['events_per_second']:.2f} events/s, "
+                f"latency={self.metrics['latency_ms']:.2f} ms, "
+                f"windows={self.metrics['window_count']}, "
+                f"checkpoints={self.metrics['checkpoint_count']}"
+            )
 
     def _update_vehicle_health(self, event: Dict):
         """更新车辆健康状态"""
         vehicle_id = event.get("vehicle_id")
         trigger_type = event.get("trigger_type")
-
-        if vehicle_id not in self.vehicle_health:
-            self.vehicle_health[vehicle_id] = {"events": 0, "last_update": datetime.now()}
-
-        self.vehicle_health[vehicle_id]["events"] += 1
-        self.vehicle_health[vehicle_id]["last_update"] = datetime.now()
-
-    def _check_high_risk_scenario(self, event: Dict) -> Optional[Dict]:
-        """检查高危场景"""
         trigger_reason = event.get("trigger_reason", "")
 
-        # AEB 频繁触发
-        if "AEB" in trigger_reason:
-            return {
-                "vehicle_id": event.get("vehicle_id"),
-                "alert_type": "HIGH_RISK",
-                "message": "检测到AEB频繁触发",
-                "timestamp": datetime.now().isoformat()
+        if vehicle_id not in self.vehicle_health:
+            self.vehicle_health[vehicle_id] = {
+                "events": 0,
+                "aeb_count": 0,
+                "high_risk_count": 0,
+                "last_update": None,
+                "health_score": 100.0,
+                "status": "normal"
             }
+
+        health = self.vehicle_health[vehicle_id]
+        health["events"] += 1
+
+        # 统计 AEB 触发
+        if "AEB" in trigger_reason:
+            health["aeb_count"] += 1
+            health["health_score"] -= 5
+            health["status"] = "warning" if health["aeb_count"] < 5 else "critical"
+
+        # 统计高危场景
+        if "rule_based" in trigger_type:
+            health["high_risk_count"] += 1
+            health["health_score"] -= 2
+
+        health["last_update"] = datetime.now()
+        health["health_score"] = max(0, health["health_score"])
+
+        logger.info(f"车辆健康更新: {vehicle_id}, 健康分={health['health_score']:.1f}, 状态={health['status']}")
+
+    def _check_high_risk_scenario(self, event: Dict) -> Optional[Dict]:
+        """
+        检查高危场景（Filter Function）
+        实现 Flink 的复杂事件处理（CEP）
+        """
+        vehicle_id = event.get("vehicle_id")
+        trigger_reason = event.get("trigger_reason", "")
+        trigger_type = event.get("trigger_type", "")
+
+        # AEB 频繁触发检测
+        if "AEB" in trigger_reason:
+            health = self.vehicle_health.get(vehicle_id, {})
+            if health.get("aeb_count", 0) >= self.AEB_ALERT_THRESHOLD:
+                return {
+                    "vehicle_id": vehicle_id,
+                    "alert_type": "AEB_FREQUENT",
+                    "severity": "high",
+                    "message": f"{self.WINDOW_SIZE_SECONDS}秒内AEB触发{health.get('aeb_count', 0)}次",
+                    "timestamp": datetime.now().isoformat(),
+                    "vehicle_health": health
+                }
+
+        # 高频触发检测
+        health = self.vehicle_health.get(vehicle_id, {})
+        if health.get("events", 0) >= self.HIGH_RISK_VEHICLE_THRESHOLD:
+            return {
+                "vehicle_id": vehicle_id,
+                "alert_type": "HIGH_FREQUENCY_TRIGGERS",
+                "severity": "medium",
+                "message": f"短时间内触发{health.get('events', 0)}次异常",
+                "timestamp": datetime.now().isoformat(),
+                "vehicle_health": health
+            }
+
+        # 健康分过低检测
+        if health.get("health_score", 100) < 60:
+            return {
+                "vehicle_id": vehicle_id,
+                "alert_type": "LOW_HEALTH_SCORE",
+                "severity": "medium",
+                "message": f"车辆健康分过低: {health.get('health_score', 100):.1f}",
+                "timestamp": datetime.now().isoformat(),
+                "vehicle_health": health
+            }
+
         return None
 
     def _send_alert(self, alert: Dict):
         """发送告警"""
         self.alerts.append(alert)
-        logger.warning(f"告警: {alert}")
+        severity = alert.get("severity", "info").upper()
+        logger.warning(f"[{severity}] 告警: {alert['message']}, 车辆: {alert['vehicle_id']}")
+
+    def get_vehicle_health_dashboard(self) -> Dict:
+        """获取车辆健康大屏数据"""
+        return {
+            "total_vehicles": len(self.vehicle_health),
+            "total_events": self.metrics["events_processed"],
+            "throughput": self.metrics["events_per_second"],
+            "active_alerts": len(self.alerts),
+            "vehicles": self.vehicle_health
+        }
+
+    def stop_stream_job(self):
+        """停止 Flink 流处理作业"""
+        logger.info("停止 Flink 流处理作业...")
+
+        # 最后一次 Checkpoint
+        self._trigger_checkpoint()
+
+        # 关闭资源
+        self.running = False
+        self.window_buffer.clear()
+        self.keyed_streams.clear()
+
+        logger.info("Flink 作业已停止")
+        logger.info(f"总处理事件数: {self.metrics['events_processed']}")
+        logger.info(f"总窗口数: {self.metrics['window_count']}")
+        logger.info(f"总检查点数: {self.metrics['checkpoint_count']}")
 
 
 class BatchProcessor:
