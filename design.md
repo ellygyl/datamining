@@ -1,7 +1,7 @@
 # 设计模式
 
 Read 车端检测任务_详细设计版.md
-用户要求我先出设计方案，确认后再开发。根据文档内容，我需要设计一个完整的自动驾驶数据闭环系统，包括：
+先出设计方案，确认后再开发。根据文档内容，设计一个完整的自动驾驶数据闭环系统，包括：
 
 车端触发模块（三层触发）
 数据流式回传云端模块（Kafka producer->topic->consumer group->consumer）
@@ -195,3 +195,36 @@ KafkaMessage
 时序库	influxdb-client (InfluxDB)
 关系数据库	psycopg2 (PostgreSQL)
 深度学习	pytorch (PyTorch)
+
+
+
+五、模块化设计
+车端触发模块 (VehicleTriggerModule)
+
+RuleBasedTrigger
+ModelBasedTrigger
+UncertaintyTrigger
+DataPackageBuilder
+数据流式回传云端模块 (CloudEdgeModule)
+
+TransmissionRouter
+CloudGateway
+KafkaProducer
+StorageManager
+流批一体数据处理 (StreamBatchProcessor)
+
+FlinkStreamProcessor
+SparkETLProcessor
+TieredStorage
+数据挖掘与构建模块 (DataMiningModule)
+
+ScenarioMiner
+AnnotationPipeline
+DataAugmenter
+模型训练与验证模块 (TrainingValidationModule)
+
+ModelTrainer
+ModelEvaluator
+SimulatorRunner
+OTADeployer
+
