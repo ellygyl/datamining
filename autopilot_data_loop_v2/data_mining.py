@@ -16,6 +16,14 @@ import random
 
 from config import Config
 
+# Import real perception module if available
+try:
+    from perception import create_perception_pipeline
+    PERCEPTION_AVAILABLE = True
+except ImportError:
+    PERCEPTION_AVAILABLE = False
+    logging.warning("Perception module not available. Will use mock for pre-annotation.")
+
 
 class ScenarioType(Enum):
     """Scenario types for categorization"""
@@ -361,8 +369,23 @@ class AnnotationPipeline:
     Implements pre-annotation, routing, and quality control
     """
 
-    def __init__(self):
-        self.foundation_model = FoundationModelMock()
+    def __init__(self, use_real_perception: bool = True):
+        """
+        Initialize annotation pipeline
+
+        Args:
+            use_real_perception: Use real perception models (YOLO, SAM, etc.)
+        """
+        # Use real perception module if available and requested
+        if use_real_perception and PERCEPTION_AVAILABLE:
+            self.perception_pipeline = create_perception_pipeline()
+            self.foundation_model = None
+            logging.info("Using real perception models for pre-annotation")
+        else:
+            self.perception_pipeline = None
+            self.foundation_model = FoundationModelMock()
+            logging.info("Using mock foundation model for pre-annotation")
+
         self.annotator_pool = AnnotatorPool()
         self.annotation_queue = []
         self.annotations: List[AnnotationResult] = []
@@ -373,7 +396,7 @@ class AnnotationPipeline:
         Annotate an event through the pipeline
 
         Pipeline:
-        1. Pre-annotation (Foundation Model)
+        1. Pre-annotation (Foundation Model / Perception Pipeline)
         2. Confidence-based routing
         3. Human annotation (if needed)
         4. Quality check
@@ -382,7 +405,14 @@ class AnnotationPipeline:
             annotation_types = ["bbox_2d", "bbox_3d", "segmentation"]
 
         # Step 1: Pre-annotation
-        pre_annotation = self.foundation_model.pre_annotate(event_data, annotation_types)
+        if self.perception_pipeline is not None:
+            # Use real perception pipeline
+            pre_annotation = self.perception_pipeline.process_for_annotation(
+                event_data, annotation_types
+            )
+        else:
+            # Use mock foundation model
+            pre_annotation = self.foundation_model.pre_annotate(event_data, annotation_types)
 
         # Step 2: Confidence-based routing
         routing = self._route_by_confidence(pre_annotation["confidence"])
@@ -428,16 +458,36 @@ class AnnotationPipeline:
 
     def _convert_pre_annotation(self, event_id: str, pre_annotation: Dict[str, Any]) -> AnnotationResult:
         """Convert pre-annotation to AnnotationResult"""
+        annotator_id = "real_perception" if self.perception_pipeline is not None else "foundation_model"
+
         return AnnotationResult(
             annotation_id=f"ann_auto_{event_id}",
             event_id=event_id,
             annotation_type=",".join(pre_annotation.get("types", [])),
             labels=pre_annotation.get("labels", {}),
-            annotator_id="foundation_model",
+            annotator_id=annotator_id,
             confidence=pre_annotation.get("confidence", 1.0),
             timestamp=datetime.now(),
             review_status="accepted"
         )
+
+    def get_perception_info(self) -> Dict[str, Any]:
+        """Get information about the perception models being used"""
+        if self.perception_pipeline is not None:
+            return {
+                "type": "real_perception",
+                "models": {
+                    "detector": self.perception_pipeline.object_detector.get_model_info(),
+                    "segmenter": self.perception_pipeline.segmenter.get_model_info(),
+                },
+                "processing_mode": "real_inference"
+            }
+        else:
+            return {
+                "type": "mock",
+                "models": {"name": "FoundationModelMock"},
+                "processing_mode": "simulation"
+            }
 
     def _quality_check(self, annotation: AnnotationResult,
                       pre_annotation: Dict[str, Any]) -> str:
@@ -480,11 +530,18 @@ class AnnotationPipeline:
         for ann in self.annotations:
             status_counts[ann.review_status] = status_counts.get(ann.review_status, 0) + 1
 
+        # Check what type of annotator was used
+        real_perception_count = sum(1 for ann in self.annotations if ann.annotator_id == "real_perception")
+        mock_count = sum(1 for ann in self.annotations if ann.annotator_id == "foundation_model")
+
         return {
             "total_annotations": len(self.annotations),
             "status_distribution": status_counts,
             "avg_confidence": np.mean([ann.confidence for ann in self.annotations]),
-            "auto_accepted": sum(1 for ann in self.annotations if ann.annotator_id == "foundation_model"),
+            "auto_accepted": real_perception_count + mock_count,
+            "real_perception_annotations": real_perception_count,
+            "mock_annotations": mock_count,
+            "perception_info": self.get_perception_info(),
         }
 
 
