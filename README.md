@@ -8,15 +8,25 @@
 
 V2：
 项目结构：autopilot_data_loop_v2/
+
 ├── __init__.py           # 包初始化
+
 ├── config.py            # 系统配置
+
 ├── vehicle_trigger.py   # 车端触发模块（三层漏斗）
+
 ├── cloud_edge.py        # 云端接入模块
+
 ├── stream_batch.py      # 流批一体处理
+
 ├── data_mining.py       # 数据挖掘与标注
+
 ├── training_validation.py # 模型训练与验证
+
 ├── main.py              # 主协调器
+
 └── requirements.txt     # 依赖包
+
 四大核心模块
 1. 车端触发模块 (vehicle_trigger.py)
 第一层: 硬规则触发 (急刹、急拐、速度差、接管等)
