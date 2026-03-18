@@ -40,7 +40,7 @@ Spark ETL Processor: 数据清洗、验证、转换流程
 OTA部署: 灰度发布机制
 运行演示
 
-cd /Users/guyanlei/Desktop/autopilot_data_loop_v2
+cd autopilot_data_loop_v2
 python3 main.py --demo
 演示结果：
 
